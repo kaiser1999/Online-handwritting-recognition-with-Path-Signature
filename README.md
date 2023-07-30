@@ -1,6 +1,6 @@
 # Online handwritting recognition with path signature
 
-This is an ongoing project in the book [1] which aims to recognize online handwritten Chinese characters with path signature. The dataset used is [CASIA-OLHWDB2.0-2.2]<http://www.nlpr.ia.ac.cn/databases/handwriting/Home.html> [3]. The results are updated regularly in **_Signature_.out_**.
+This is an ongoing project in the book [1] which aims to recognize online handwritten Chinese characters with path signature. The dataset used is [CASIA-OLHWDB2.0-2.2](http://www.nlpr.ia.ac.cn/databases/handwriting/Home.html) [3]. The results are updated regularly in **_Signature_.out_**.
 
 We here adopt mostly similar model structure in [2] except some minor adjustments:
 1. The training inputs are fixed at size 126x2400 instead of 126x576, where each training input represents a line of Chinese characters in the paragraph
