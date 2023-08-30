@@ -114,6 +114,15 @@ class Preprocess():
         self.total_entries = len(self.raw_labels)
         self.input_shape = (HEIGHT, WIDTH, 2**(self.sig_order+1)-1)
     
+    def get_labels(self, path):
+        labels = []
+        files = [filepath for filepath in os.listdir(path) if self.extension in filepath]
+        for filepath in tqdm(files):
+            self.read_file(os.path.join(path, filepath))
+            labels.append(self.line_labels)
+        
+        return labels
+    
     def read_file(self, filepath):
         '''
         See the pdf document http://www.nlpr.ia.ac.cn/databases/Download/WPTTRead.cpp.pdf
@@ -179,7 +188,7 @@ class Preprocess():
         
         return stroke_x, stroke_y, line_num_lst
     
-    def read_path(self, path, plot_fig=False):
+    def read_path(self, path, train=True, plot_fig=False):
         path = path.decode("utf-8")
         for filepath in os.listdir(path):
             if not filepath.endswith(self.extension):
@@ -220,11 +229,14 @@ class Preprocess():
                 if plot_fig:
                     axes[line].imshow(data[:,:,0], cmap="binary")
                     axes[line].axis("off")
-                    
-                # label encoding
-                labels = padding([self.characters.index(char) for char in self.line_labels[line]], 
-                                 self.max_length, len(self.characters))
-                yield tf.constant(data/255, tf.float32), tf.constant(labels, tf.float32)
+                
+                if train:
+                    # label encoding
+                    labels = padding([self.characters.index(char) for char in self.line_labels[line]], 
+                                     self.max_length, len(self.characters))
+                    yield tf.constant(data/255, tf.float32), tf.constant(labels, tf.float32)
+                else:
+                    yield tf.constant(data/255, tf.float32), tf.constant(self.line_labels[line], tf.string)
     
     def image_rescaling(self, stroke_x, stroke_y, line_num_lst):
         '''

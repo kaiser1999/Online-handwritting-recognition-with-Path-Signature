@@ -1,10 +1,8 @@
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Conv2D, MaxPool2D, Bidirectional, LSTM, Flatten
-from tensorflow.keras.layers import TimeDistributed, BatchNormalization, Activation, LayerNormalization
+from tensorflow.keras.layers import TimeDistributed, BatchNormalization, Activation
 from tensorflow.keras.layers import Cropping2D, Add, Concatenate, Reshape, Lambda
 from tensorflow.keras.regularizers import L2
-
-print(tf.config.list_physical_devices("GPU"))
 
 win_len = 78
 def extract_patches(img, img_height, stride=1):
@@ -13,93 +11,13 @@ def extract_patches(img, img_height, stride=1):
                                     padding='VALID')
 
 #%%
-class BaseNormalization(tf.keras.layers.Layer):
-    def __init__(self,
-                 axis=-1,
-                 epsilon=0.001,
-                 center=True,
-                 scale=True,
-                 gamma_initializer="ones",
-                 beta_initializer="zeros",
-                 gamma_regularizer=None,
-                 beta_regularizer=None,
-                 **kwargs):
+from tensorflow.keras.layers import GroupNormalization
 
-        super().__init__(**kwargs)
-        if isinstance(axis, int):
-            axis = [axis]
-        self.axis = list(axis)
-        self.epsilon = epsilon
-        self.center = center
-        self.scale = scale
-        
-        self.gamma_initializer = tf.keras.initializers.get(gamma_initializer)
-        self.beta_initializer = tf.keras.initializers.get(beta_initializer)
-        
-        self.gamma_regularizer = tf.keras.regularizers.get(gamma_regularizer)
-        self.beta_regularizer = tf.keras.regularizers.get(beta_regularizer)
+class InstanceNormalization(GroupNormalization):
+    def __init__(self, axis=-1, **kwargs):
+        super().__init__(groups=-1, axis=axis, **kwargs)
 
-    def build(self, input_shape):
-        self.axis = [len(input_shape) + ax if ax < 0 else ax for ax in self.axis]
-        self.shape = tuple(input_shape[ax] for ax in self.axis)
-        self.para_shape = tuple(input_shape[ax] if ax in self.axis else 1 for ax in range(1, len(input_shape)))
-    
-    def build_weight(self, add_name=""):
-        gamma, beta = 1., 0.
-        if self.scale:
-            gamma = self.add_weight(
-                name=f'gamma{add_name}',
-                shape=self.shape,
-                initializer=self.gamma_initializer,
-                regularizer=self.gamma_regularizer,
-                trainable=True
-            )
-        if self.center:
-            beta = self.add_weight(
-                name=f'beta{add_name}',
-                shape=self.shape,
-                initializer=self.beta_initializer,
-                regularizer=self.beta_regularizer,
-                trainable=True
-            )
-        
-        return gamma, beta
-
-    @tf.function
-    def _get_normalize(self, inputs, training=None):        
-        mean = tf.math.reduce_mean(inputs, axis=self.reduce_axis, keepdims=True)
-        variance = tf.math.reduce_mean(tf.math.square(inputs - mean), axis=self.reduce_axis, keepdims=True)
-        std = tf.sqrt(variance + self.epsilon)
-        outputs = (inputs - mean) / std
-        if self.scale:
-            outputs *= tf.reshape(self.gamma, self.para_shape)
-        if self.center:
-            outputs += tf.reshape(self.beta, self.para_shape)
-        return outputs
-
-class InstanceNormalization(BaseNormalization):
-    '''
-        axis: at which channel locate; different from LayerNormalization
-        compute statistics across (Height, Width) ONLY
-        e.g. input_shape = (Batch, Height, Width, Channel); axis=-1
-        e.g. input_shape = (Batch, Time, Frequency, Channel); axis=-1
-    '''
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        
-
-    def build(self, input_shape):
-        super().build(input_shape)
-        self.gamma, self.beta = self.build_weight()
-        self.reduce_axis = [ax for ax in range(1, len(input_shape)) if ax not in self.axis]
-
-    @tf.function
-    def call(self, inputs, training=None):
-        outputs = self._get_normalize(inputs, training)
-        
-        return outputs
-
-#%%
+#%% 
 class CTCLayer(tf.keras.layers.Layer):
     def __init__(self, name=None):
         super().__init__(name=name)
@@ -220,8 +138,8 @@ def MCFCRN(total_words, input_shape, print_summary=False):
     #x3 = tf.pad(x3, ((0, 0), (0, 0), (0, 0), (1, 1), (0, 0)))
     x3 = TimeDistributed(Conv2D(256, (3, 3), strides=(1, 1), activation="relu",
                                 kernel_regularizer=L2(0.001)))(x3)
-    x3 = TimeDistributed(InstanceNormalization())(x3)
-    x3 = TimeDistributed(Activation("relu"))(x3)
+    #x3 = TimeDistributed(InstanceNormalization())(x3)
+    #x3 = TimeDistributed(Activation("relu"))(x3)
     
     # FCRN
     x1 = TimeDistributed(MaxPool2D(pool_size=(2, 2), strides=(2, 2)))(x1)
@@ -335,30 +253,6 @@ def MCFCRN(total_words, input_shape, print_summary=False):
         model.summary()
     return model
 
-def transfer_learning(base_model, total_words, input_shape, print_summary=False):
-    img = tf.keras.Input(name="images", shape=input_shape, dtype="float32")
-    labels = tf.keras.Input(name="label", shape=(None,), dtype="float32")
-    
-    base_model.trainable = False
-    x = base_model(img)
-    x = Dense(1024, use_bias=False)(x) # Embedding layer with float inputs
-    #x = Embedding(1024, 512, trainable=True)(x)
-    x = Bidirectional(LSTM(512, return_sequences=True, dropout=0.3,
-                           kernel_regularizer=L2(0.001)), merge_mode='sum')(x)
-    x = Bidirectional(LSTM(512, return_sequences=True, dropout=0.3,
-                           kernel_regularizer=L2(0.001)), merge_mode='sum')(x)
-    x = Dense(1024, activation="relu", kernel_regularizer=L2(0.001))(x)
-    x = Dense(1024, activation="relu", kernel_regularizer=L2(0.001))(x)
-    
-    x = Dense(total_words+1, activation="softmax", name="soft_out",
-              kernel_regularizer=L2(0.001))(x)
-    output = CTCLayer(name="ctc_loss")(labels, x)
-    
-    model = tf.keras.Model(inputs=[img, labels], outputs=output, name="MCFCRN")
-    if print_summary:
-        model.summary()
-    return model
-
 #%%
 def create_dataset(feature, labels):
     '''
@@ -371,8 +265,6 @@ from tensorflow.keras.optimizers.legacy import Adadelta
 from tensorflow.keras.optimizers import Adam
 # Adadelta encounters gradient vanishing problem; probably because of small mini-batch
 
-batch_size = 36 # max at 8 for K80:4; 36 for V100:3
-
 from Get_Data import Preprocess
 
 train_path = "WPTT2.0-Train"
@@ -383,9 +275,12 @@ train_data = tf.data.Dataset.from_generator(PRE.read_path, (tf.float32, tf.float
 train_data = train_data.map(create_dataset, num_parallel_calls=tf.data.AUTOTUNE)
 # setting large batch size even like 2 raise out of GPU memory error, so probably
 # using InstanceNormalization instead of TimeDistributed(BatchNormalization())
-train_data = train_data.shuffle(buffer_size=PRE.total_entries//100).batch(batch_size, drop_remainder=True,
-    num_parallel_calls=tf.data.AUTOTUNE)
-print(PRE.total_entries)
+train_data = train_data.shuffle(buffer_size=PRE.total_entries//100).batch(1)
+
+#%%
+test_path = "WPTT2.0-Test"
+test_data = tf.data.Dataset.from_generator(PRE.read_path, (tf.float32, tf.string), 
+                                           args=(test_path,False)).batch(1)
 
 #%%
 # initial_learning_rate * decay_rate ^ (step / decay_steps)
@@ -397,48 +292,25 @@ lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
     staircase=True)
 
 #%%
-strategy = tf.distribute.MirroredStrategy()
-print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
+from datetime import datetime
 
-with strategy.scope():
+if __name__ == "__main__":
+    
     MCFCRN_model = MCFCRN(len(PRE.characters), PRE.input_shape)
     MCFCRN_model.compile(optimizer=Adam(learning_rate=lr_schedule))
     #MCFCRN_model.compile(optimizer=Adadelta(learning_rate=0.0001, rho=0.9))
-
-MCFCRN_model.fit(train_data, epochs=200, shuffle=True)
-MCFCRN_model.save("MCFCRN")
-#%%
-test_path = "WPTT2.0-Test"
-test_data = tf.data.Dataset.from_generator(PRE.read_path, (tf.float32, tf.float32), 
-                                           args=(test_path,)).batch(1)
-
-MCFCRN_prediction_model = tf.keras.models.Model(
-    MCFCRN_model.get_layer(name="images").input, MCFCRN_model.get_layer(name="soft_out").output
-)
-y_MCFCRN = MCFCRN_prediction_model.predict(test_data)
-print(PRE.model_decoder(y_MCFCRN))
-
-#%%
-for f, label in test_data:
-    print(PRE.label_decoder(label.numpy()))
+    MCFCRN_model.fit(train_data, epochs=200, shuffle=True)
+    MCFCRN_model.save(f"MCFCRN_{round(datetime.now().timestamp())}")
     
-#%%
-base_model = tf.keras.models.Model(
-    MCFCRN_model.get_layer(name="images").input, MCFCRN_model.get_layer(name="concat").output
-)
-
-with strategy.scope():
-    transfer_model = transfer_learning(base_model, len(PRE.characters), PRE.input_shape)
-    transfer_model.compile(optimizer=Adam(learning_rate=lr_schedule))
-    #transfer_model.compile(optimizer=Adadelta(learning_rate=0.0001, rho=0.9))
-
-transfer_model.fit(train_data, epochs=200, shuffle=True)
-transfer_model.save("Transfer")
-
-#%%
-transfer_prediction_model = tf.keras.models.Model(
-    transfer_model.get_layer(name="images").input, transfer_model.get_layer(name="soft_out").output
-)
-
-y_transfer = transfer_prediction_model.predict(test_data)
-print(PRE.model_decoder(y_transfer))
+    #%%
+    MCFCRN_prediction_model = tf.keras.models.Model(
+        MCFCRN_model.get_layer(name="images").input, MCFCRN_model.get_layer(name="soft_out").output
+    )
+    y_MCFCRN = MCFCRN_prediction_model.predict(test_data)
+    y_MCFCRN_decode = PRE.model_decoder(y_MCFCRN)
+    
+    #%%
+    for i, (f, label) in enumerate(test_data):
+        print(f"{i}_actual_pred")
+        print(label.numpy()[0].decode("utf-8"))
+        print(y_MCFCRN_decode[i])

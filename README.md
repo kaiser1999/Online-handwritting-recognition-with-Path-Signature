@@ -18,6 +18,22 @@ The spec of this set-up is:
 4. nvidia-pyindex - 1.0.9
 5. 3 Tesla-V100 GPUs to support a batch size of 36
 
+# File Description
+1.Get_Data.py
+It gets training data from the folder "WPTT2.0-Train" and test data from folder "WPTT2.0-Test", each folder contains all handwritten paragraphs from "CASIA-OLHWDB 2.0, 2.1, 2.2". 
+
+2. MCFCRN.py
+It builds the base model for MCFCRN and save the fitted base model in the folder named "MCFCRN_{timestamp}".
+
+3. Transfer.py
+It builds the transfer model from the base model and save the fitted transfer model in the folder named "Transfer_{timestamp}".
+
+4. Signature.out
+It records all information for all 200 epochs in training the base model for MCFCRN.
+
+5. Transfer.out
+It records all information for all 200 epochs in training the transfer model and the "actual vs prediction" pair for each test entries.
+
 # Reference
 [1]: Kaiser Fan, Phillip Yam (Expected 2024) . Statistical Deep Learning with Python and R.
 
