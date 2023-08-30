@@ -19,7 +19,7 @@ The spec of this set-up is:
 5. 3 Tesla-V100 GPUs to support a batch size of 36
 
 # File Description
-1.Get_Data.py
+1. Get_Data.py
 It gets training data from the folder "WPTT2.0-Train" and test data from folder "WPTT2.0-Test", each folder contains all handwritten paragraphs from "CASIA-OLHWDB 2.0, 2.1, 2.2". 
 
 2. MCFCRN.py
