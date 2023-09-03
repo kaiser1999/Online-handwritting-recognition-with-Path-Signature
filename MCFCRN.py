@@ -1,8 +1,10 @@
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Conv2D, MaxPool2D, Bidirectional, LSTM, Flatten
-from tensorflow.keras.layers import TimeDistributed, BatchNormalization, Activation
+from tensorflow.keras.layers import TimeDistributed, BatchNormalization, Activation, LayerNormalization
 from tensorflow.keras.layers import Cropping2D, Add, Concatenate, Reshape, Lambda
 from tensorflow.keras.regularizers import L2
+
+print(tf.config.list_physical_devices("GPU"))
 
 win_len = 78
 def extract_patches(img, img_height, stride=1):
@@ -17,7 +19,7 @@ class InstanceNormalization(GroupNormalization):
     def __init__(self, axis=-1, **kwargs):
         super().__init__(groups=-1, axis=axis, **kwargs)
 
-#%% 
+#%%
 class CTCLayer(tf.keras.layers.Layer):
     def __init__(self, name=None):
         super().__init__(name=name)
@@ -138,22 +140,22 @@ def MCFCRN(total_words, input_shape, print_summary=False):
     #x3 = tf.pad(x3, ((0, 0), (0, 0), (0, 0), (1, 1), (0, 0)))
     x3 = TimeDistributed(Conv2D(256, (3, 3), strides=(1, 1), activation="relu",
                                 kernel_regularizer=L2(0.001)))(x3)
-    #x3 = TimeDistributed(InstanceNormalization())(x3)
-    #x3 = TimeDistributed(Activation("relu"))(x3)
+    x3 = TimeDistributed(InstanceNormalization())(x3)
+    x3 = TimeDistributed(Activation("relu"))(x3)
     
     # FCRN
     x1 = TimeDistributed(MaxPool2D(pool_size=(2, 2), strides=(2, 2)))(x1)
     x1 = TimeDistributed(Conv2D(512, (1, 1), strides=(1, 1),
                                 kernel_regularizer=L2(0.001)))(x1)
-    x1 = TimeDistributed(InstanceNormalization())(x1)
+    x1 = InstanceNormalization()(x1)
     x1 = TimeDistributed(Activation("relu"))(x1)
     x1 = TimeDistributed(Conv2D(512, (3, 1), strides=(3, 1),
                                 kernel_regularizer=L2(0.001)))(x1)
-    x1 = TimeDistributed(InstanceNormalization())(x1)
+    x1 = InstanceNormalization()(x1)
     x1 = TimeDistributed(Activation("relu"))(x1)
     x1 = TimeDistributed(Conv2D(1024, (2, 1), strides=(2, 1),
                                 kernel_regularizer=L2(0.001)))(x1)
-    x1 = TimeDistributed(InstanceNormalization())(x1)
+    x1 = InstanceNormalization()(x1)
     x1 = TimeDistributed(Activation("relu"))(x1)
     x1 = TimeDistributed(Flatten())(x1)
     
@@ -265,17 +267,20 @@ from tensorflow.keras.optimizers.legacy import Adadelta
 from tensorflow.keras.optimizers import Adam
 # Adadelta encounters gradient vanishing problem; probably because of small mini-batch
 
+batch_size = 36 # max at 8 for K80:4; 24 for V100:3
+
 from Get_Data import Preprocess
 
 train_path = "WPTT2.0-Train"
 PRE = Preprocess(path=train_path)
+
 #%%
 train_data = tf.data.Dataset.from_generator(PRE.read_path, (tf.float32, tf.float32), 
                                          args=(train_path,))
 train_data = train_data.map(create_dataset, num_parallel_calls=tf.data.AUTOTUNE)
 # setting large batch size even like 2 raise out of GPU memory error, so probably
 # using InstanceNormalization instead of TimeDistributed(BatchNormalization())
-train_data = train_data.shuffle(buffer_size=PRE.total_entries//100).batch(1)
+train_data = train_data.shuffle(buffer_size=PRE.total_entries//100).batch(batch_size)
 
 #%%
 test_path = "WPTT2.0-Test"
@@ -295,10 +300,14 @@ lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
 from datetime import datetime
 
 if __name__ == "__main__":
-    
-    MCFCRN_model = MCFCRN(len(PRE.characters), PRE.input_shape)
-    MCFCRN_model.compile(optimizer=Adam(learning_rate=lr_schedule))
-    #MCFCRN_model.compile(optimizer=Adadelta(learning_rate=0.0001, rho=0.9))
+    strategy = tf.distribute.MirroredStrategy()
+    print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
+
+    with strategy.scope():
+        MCFCRN_model = MCFCRN(len(PRE.characters), PRE.input_shape)
+        MCFCRN_model.compile(optimizer=Adam(learning_rate=lr_schedule))
+        #MCFCRN_model.compile(optimizer=Adadelta(learning_rate=0.0001, rho=0.9))
+
     MCFCRN_model.fit(train_data, epochs=200, shuffle=True)
     MCFCRN_model.save(f"MCFCRN_{round(datetime.now().timestamp())}")
     
